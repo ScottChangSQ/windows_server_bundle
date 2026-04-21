@@ -1,0 +1,73 @@
+# 生产可直接使用的默认 Caddy 配置。
+# App 正式入口已经固定为 https://tradeapp.ltd，因此默认配置必须直接提供该域名的 HTTPS 服务。
+
+(common_headers) {
+    header {
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "no-referrer"
+    }
+}
+
+http://tradeapp.ltd {
+    import common_headers
+    redir https://tradeapp.ltd{uri} 308
+}
+
+tradeapp.ltd {
+    import common_headers
+    encode gzip
+
+    header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+
+    @mt5_root path /health /v1/* /v2/* /openapi.json /docs*
+    handle @mt5_root {
+        reverse_proxy 127.0.0.1:8787
+    }
+
+    handle_path /mt5/* {
+        reverse_proxy 127.0.0.1:8787
+    }
+
+    basic_auth /admin/* {
+        a378910115 $2b$14$G4poTjzSnRuvkj.M87Wi5.qLUyTce4QmGtp34llNXxW2mNPDCAPti
+    }
+
+    handle_path /admin/* {
+        reverse_proxy 127.0.0.1:8788
+    }
+
+    handle_path /binance-rest/* {
+        reverse_proxy https://fapi.binance.com {
+            header_up Host fapi.binance.com
+        }
+    }
+
+    handle_path /binance-ws/* {
+        reverse_proxy https://fstream.binance.com {
+            header_up Host fstream.binance.com
+        }
+    }
+
+    respond "not found" 404
+}
+
+:80 {
+    import common_headers
+    encode gzip
+
+    basic_auth /admin/* {
+        a378910115 $2b$14$G4poTjzSnRuvkj.M87Wi5.qLUyTce4QmGtp34llNXxW2mNPDCAPti
+    }
+
+    handle_path /admin/* {
+        reverse_proxy 127.0.0.1:8788
+    }
+
+    @local_mt5_root path /health /v1/source
+    handle @local_mt5_root {
+        reverse_proxy 127.0.0.1:8787
+    }
+
+    respond "not found" 404
+}

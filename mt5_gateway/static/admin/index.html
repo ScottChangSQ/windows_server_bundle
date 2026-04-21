@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MT5 网关管理面板</title>
+    <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+<main class="page">
+    <section class="hero">
+        <div>
+            <p class="eyebrow">BTC/XAU Monitoring</p>
+            <h1>MT5 网关轻量管理面板</h1>
+            <p class="subtitle">本机 / 公网可访问。用于查看状态、编辑配置、管理异常规则和控制关键组件。</p>
+        </div>
+        <div class="hero-actions">
+            <button id="refreshAllBtn" class="primary-btn">刷新全部状态</button>
+            <span id="globalNotice" class="notice">等待首次加载</span>
+        </div>
+    </section>
+
+    <section class="panel-grid" id="componentGrid"></section>
+
+    <section class="two-col">
+        <article class="panel">
+            <div class="panel-header">
+                <h2>网关状态</h2>
+                <button id="refreshStateBtn" class="secondary-btn">刷新</button>
+            </div>
+            <pre id="gatewayStateBox" class="code-box"></pre>
+        </article>
+        <article class="panel">
+            <div class="panel-header">
+                <h2>最近日志</h2>
+                <div class="inline-actions">
+                    <button id="toggleLogsBtn" class="secondary-btn">展开日志</button>
+                    <button id="refreshLogsBtn" class="secondary-btn">刷新</button>
+                </div>
+            </div>
+            <pre id="logsBox" class="code-box compact"></pre>
+        </article>
+    </section>
+
+    <section class="two-col">
+        <article class="panel">
+            <div class="panel-header">
+                <h2>.env 配置</h2>
+                <button id="saveEnvBtn" class="primary-btn">保存 .env</button>
+            </div>
+            <textarea id="envEditor" class="editor" spellcheck="false"></textarea>
+        </article>
+        <article class="panel">
+            <div class="panel-header">
+                <h2>异常规则配置</h2>
+                <div class="inline-actions">
+                    <button id="refreshAbnormalBtn" class="secondary-btn">刷新</button>
+                    <button id="saveAbnormalBtn" class="primary-btn">保存规则</button>
+                    <button id="clearCacheBtn" class="danger-btn">清缓存</button>
+                </div>
+            </div>
+            <textarea id="abnormalEditor" class="editor" spellcheck="false"></textarea>
+        </article>
+    </section>
+</main>
+
+<script src="./app.js"></script>
+</body>
+</html>
