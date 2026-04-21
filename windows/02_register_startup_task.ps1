@@ -84,7 +84,7 @@ function Resolve-TaskRegistrationProfile {
     if (-not [string]::IsNullOrWhiteSpace($interactiveUser)) {
         return [PSCustomObject]@{
             Trigger = New-ScheduledTaskTrigger -AtLogOn -User $interactiveUser
-            Principal = New-ScheduledTaskPrincipal -UserId $interactiveUser -LogonType InteractiveToken -RunLevel Highest
+            Principal = New-ScheduledTaskPrincipal -UserId $interactiveUser -LogonType Interactive -RunLevel Highest
             LaunchMode = "interactive_user"
             UserId = $interactiveUser
             TriggerType = "AtLogOn"

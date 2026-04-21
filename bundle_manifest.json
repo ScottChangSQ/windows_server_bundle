@@ -1,7 +1,7 @@
 {
   "bundleName": "windows_server_bundle",
-  "generatedAt": "2026-04-21T16:39:58.259430+00:00",
-  "bundleFingerprint": "cea2c5169a03ddc6f3880efca816f5d75a892c17bd8252c0252afbbf7ecb931d",
+  "generatedAt": "2026-04-21T16:46:59.460234+00:00",
+  "bundleFingerprint": "2ff251c53c380d7d68f39917a7d69b6910da52309d1a1e258901990a66fa8d25",
   "fileHashes": {
     "deploy_bundle.cmd": "17de6b05ad6ec6b0adc0614c1e6240c8e55b8d6efe88f2ef65e808aa79e401bd",
     "deploy_bundle.ps1": "9a155ba92a88b1d16f794754403dee6f54f88b55eb052871de047a658cdf8ec2",
@@ -34,9 +34,9 @@
     "mt5_gateway/v2_trade_models.py": "6e3978f5d2dd86725b7b6b690983faf978eae8c2e12b4ac6881c79383422f0df",
     "windows/.env.example": "c7375608a7bab464196f5b90eeac18fee602a261adbc508ca3d82e116d10f508",
     "windows/01_bootstrap_gateway.ps1": "9850c378f85c0b720262e357f19070aa7aa72c97ab8f4ff7436daaef8386eeeb",
-    "windows/02_register_startup_task.ps1": "e3a00d76c7c8c52481f02e5ee8ffd2b7ad4cbc08fa11ff3c05f71e790be4603f",
+    "windows/02_register_startup_task.ps1": "44d308014565d59f58432e1df77be2ff69f7fc9ae8f8c7892691e3de4b367ab9",
     "windows/03_run_healthcheck.ps1": "bee2beb1384b05921378d7d970e0dd194e320fcaaab780999bf75d91719a73b7",
-    "windows/04_register_admin_panel_task.ps1": "0dbcbc80944ad9aa3988f561dcfb4b99c37f44973d2c8f133175002c24f60e24",
+    "windows/04_register_admin_panel_task.ps1": "56b6845b342f67eb21955d02ca1e54965732b3cc47710562b91d93b2d558b774",
     "windows/Caddyfile": "c0e3f7f516f0ffd2b88d07c5a115a07291ee750b37f3a14fb9f27c4414e59a57",
     "windows/Caddyfile.example": "299e47f6c567e3c121c00ac72ebd8417a16b82651fb9e5c50e8123ebb052e081",
     "windows/run_admin_panel.ps1": "3c411593bf98076e159042101b80a57b28ac5ef145362ec9dc296ef238ad1da0",
