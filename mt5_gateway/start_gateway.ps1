@@ -257,6 +257,11 @@ if (Test-Path $resolvedEnvFile) {
     Write-Host "Env file not found, continuing with current process environment."
 }
 
+$currentIdentity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+$currentSessionId = [System.Diagnostics.Process]::GetCurrentProcess().SessionId
+Write-Host ("Gateway process identity: " + $currentIdentity.Name)
+Write-Host ("Gateway process session id: " + $currentSessionId)
+
 Assert-RequiredGatewayEnv -Keys @(
     "MT5_LOGIN",
     "MT5_PASSWORD",

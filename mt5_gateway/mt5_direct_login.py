@@ -1,4 +1,4 @@
-"""隔离进程 MT5 直登脚本，按官方顺序 initialize -> login -> shutdown。"""
+"""隔离进程 MT5 直登脚本，按 initialize -> login -> shutdown 执行。"""
 
 from __future__ import annotations
 
@@ -10,15 +10,16 @@ from typing import Any, Dict
 
 
 _TRACE_FILE_PATH = ""
+_INITIALIZE_RETRY_INTERVAL_MS = 2000
+_INITIALIZE_ATTEMPT_TIMEOUT_CAP_MS = 15000
+_INITIALIZE_ATTEMPT_TIMEOUT_FLOOR_MS = 5000
 
 
 def _now_ms() -> int:
-    """返回当前毫秒时间戳。"""
     return int(time.time() * 1000)
 
 
 def _read_payload() -> Dict[str, Any]:
-    """从标准输入读取直登参数。"""
     raw = sys.stdin.buffer.read()
     if not raw:
         raise ValueError("direct login payload is empty")
@@ -29,7 +30,6 @@ def _read_payload() -> Dict[str, Any]:
 
 
 def _flush_trace(trace: list[Dict[str, Any]]) -> None:
-    """把当前阶段轨迹立即写入 trace 文件，保证超时场景仍可回收。"""
     trace_file_path = str(_TRACE_FILE_PATH or "").strip()
     if not trace_file_path:
         return
@@ -48,7 +48,6 @@ def _append_trace(trace: list[Dict[str, Any]],
                   message: str,
                   error_code: str = "",
                   **detail: Any) -> None:
-    """向结果里追加一条阶段事实。"""
     item = {
         "stage": str(stage or "").strip(),
         "status": str(status or "").strip(),
@@ -66,7 +65,6 @@ def _append_trace(trace: list[Dict[str, Any]],
 
 
 def _normalize_server_identity(server_value: Any) -> str:
-    """统一规范化服务器名，避免仅分隔符差异造成误判。"""
     raw = str(server_value or "").strip().lower()
     if not raw:
         return ""
@@ -74,27 +72,35 @@ def _normalize_server_identity(server_value: Any) -> str:
 
 
 def _emit_result(payload: Dict[str, Any]) -> int:
-    """输出统一 JSON 结果。"""
     sys.stdout.write(json.dumps(payload, ensure_ascii=False))
     sys.stdout.flush()
     return 0 if bool(payload.get("ok", False)) else 1
 
 
-def _initialize_terminal_connection(mt5_module: Any,
-                                    path_value: str,
-                                    timeout_ms: int,
-                                    trace: list[Dict[str, Any]]) -> tuple[bool, str]:
-    """先连接 MT5 终端程序，再进入正式账号登录。"""
-    kwargs = {"timeout": timeout_ms}
+def _should_retry_initialize(error_message: str) -> bool:
+    normalized = str(error_message or "").strip().lower()
+    if not normalized:
+        return False
+    return (
+        "ipc timeout" in normalized
+        or "ipc" in normalized
+        or "-10005" in normalized
+        or "timeout" in normalized
+    )
+
+
+def _compute_initialize_attempt_timeout(remaining_ms: int) -> int:
+    bounded_remaining_ms = max(1000, int(remaining_ms or 0))
+    capped_timeout_ms = min(_INITIALIZE_ATTEMPT_TIMEOUT_CAP_MS, bounded_remaining_ms)
+    if bounded_remaining_ms <= _INITIALIZE_ATTEMPT_TIMEOUT_FLOOR_MS:
+        return bounded_remaining_ms
+    return max(_INITIALIZE_ATTEMPT_TIMEOUT_FLOOR_MS, capped_timeout_ms)
+
+
+def _initialize_once(mt5_module: Any, path_value: str, timeout_ms: int) -> tuple[bool, str]:
+    kwargs = {"timeout": int(timeout_ms)}
     if path_value:
         kwargs["path"] = path_value
-    _append_trace(
-        trace,
-        "direct_initialize_start",
-        "pending",
-        "开始建立 MT5 基础终端连接",
-        path=path_value,
-    )
     try:
         initialized = bool(mt5_module.initialize(**kwargs))
     except TypeError:
@@ -106,10 +112,67 @@ def _initialize_terminal_connection(mt5_module: Any,
             return False, f"MT5 initialize failed: {exc}"
     except Exception as exc:
         return False, f"MT5 initialize failed: {exc}"
-    if not initialized:
-        return False, f"MT5 initialize failed: {mt5_module.last_error()}"
-    _append_trace(trace, "direct_initialize_ok", "ok", "MT5 基础终端连接已建立")
-    return True, ""
+    if initialized:
+        return True, ""
+    return False, f"MT5 initialize failed: {mt5_module.last_error()}"
+
+
+def _initialize_terminal_connection(mt5_module: Any,
+                                    path_value: str,
+                                    timeout_ms: int,
+                                    trace: list[Dict[str, Any]]) -> tuple[bool, str]:
+    _append_trace(
+        trace,
+        "direct_initialize_start",
+        "pending",
+        "开始建立 MT5 基础终端连接",
+        path=path_value,
+    )
+    deadline_ms = _now_ms() + max(1000, int(timeout_ms or 0))
+    attempt = 0
+    last_error_message = ""
+    while True:
+        attempt += 1
+        remaining_ms = max(0, deadline_ms - _now_ms())
+        if remaining_ms <= 0:
+            return False, last_error_message or "MT5 initialize failed: initialize budget exhausted"
+        attempt_timeout_ms = _compute_initialize_attempt_timeout(remaining_ms)
+        initialized, initialize_error = _initialize_once(
+            mt5_module=mt5_module,
+            path_value=path_value,
+            timeout_ms=attempt_timeout_ms,
+        )
+        if initialized:
+            _append_trace(
+                trace,
+                "direct_initialize_ok",
+                "ok",
+                "MT5 基础终端连接已建立",
+                attempt=attempt,
+                attemptTimeoutMs=attempt_timeout_ms,
+            )
+            return True, ""
+        last_error_message = initialize_error
+        remaining_after_attempt_ms = max(0, deadline_ms - _now_ms())
+        if not _should_retry_initialize(last_error_message):
+            return False, last_error_message
+        if remaining_after_attempt_ms <= _INITIALIZE_RETRY_INTERVAL_MS:
+            return False, last_error_message
+        try:
+            mt5_module.shutdown()
+        except Exception:
+            pass
+        _append_trace(
+            trace,
+            "direct_initialize_retry_wait",
+            "pending",
+            "MT5 刚启动，等待 IPC 就绪后重试 initialize",
+            attempt=attempt,
+            attemptTimeoutMs=attempt_timeout_ms,
+            remainingBudgetMs=remaining_after_attempt_ms,
+            lastError=last_error_message,
+        )
+        time.sleep(_INITIALIZE_RETRY_INTERVAL_MS / 1000.0)
 
 
 def _login_account(mt5_module: Any,
@@ -118,7 +181,6 @@ def _login_account(mt5_module: Any,
                    server_value: str,
                    timeout_ms: int,
                    trace: list[Dict[str, Any]]) -> tuple[bool, str]:
-    """在已连接终端上登录本次输入的账号。"""
     _append_trace(
         trace,
         "direct_login_start",
@@ -156,7 +218,6 @@ def _login_account(mt5_module: Any,
 
 
 def main() -> int:
-    """执行隔离进程 MT5 单路径直登。"""
     global _TRACE_FILE_PATH
     trace: list[Dict[str, Any]] = []
     mt5_module: Any = None
@@ -169,14 +230,30 @@ def main() -> int:
         path_value = str(payload.get("path") or "").strip()
         timeout_ms = int(payload.get("timeoutMs") or 0)
         if login_value <= 0 or not password_value or not server_value or timeout_ms <= 0:
-            _append_trace(trace, "direct_payload_invalid", "failed", "直登参数不完整", error_code="SESSION_DIRECT_INVALID_PAYLOAD")
-            return _emit_result({"ok": False, "error": "direct login payload missing login/password/server/timeoutMs", "trace": trace})
+            _append_trace(
+                trace,
+                "direct_payload_invalid",
+                "failed",
+                "直登参数不完整",
+                error_code="SESSION_DIRECT_INVALID_PAYLOAD",
+            )
+            return _emit_result({
+                "ok": False,
+                "error": "direct login payload missing login/password/server/timeoutMs",
+                "trace": trace,
+            })
 
         try:
             import MetaTrader5 as mt5  # type: ignore
             mt5_module = mt5
         except Exception as exc:
-            _append_trace(trace, "direct_import_failed", "failed", f"MetaTrader5 导入失败: {exc}", error_code="SESSION_DIRECT_IMPORT_FAILED")
+            _append_trace(
+                trace,
+                "direct_import_failed",
+                "failed",
+                f"MetaTrader5 导入失败: {exc}",
+                error_code="SESSION_DIRECT_IMPORT_FAILED",
+            )
             return _emit_result({"ok": False, "error": f"MetaTrader5 import failed: {exc}", "trace": trace})
 
         initialized, initialize_error = _initialize_terminal_connection(
@@ -223,7 +300,11 @@ def main() -> int:
                 f"登录后读取 MT5 当前账号身份失败: {exc}",
                 error_code="SESSION_DIRECT_IDENTITY_FAILED",
             )
-            return _emit_result({"ok": False, "error": f"MT5 canonical account identity missing after direct login: {exc}", "trace": trace})
+            return _emit_result({
+                "ok": False,
+                "error": f"MT5 canonical account identity missing after direct login: {exc}",
+                "trace": trace,
+            })
 
         canonical_login = str(getattr(account, "login", "") or "").strip() if account is not None else ""
         canonical_server = str(getattr(account, "server", "") or "").strip() if account is not None else ""
@@ -235,7 +316,11 @@ def main() -> int:
                 "登录后未能读取到完整的 MT5 当前账号身份",
                 error_code="SESSION_DIRECT_IDENTITY_FAILED",
             )
-            return _emit_result({"ok": False, "error": "MT5 canonical account identity missing after direct login", "trace": trace})
+            return _emit_result({
+                "ok": False,
+                "error": "MT5 canonical account identity missing after direct login",
+                "trace": trace,
+            })
         if canonical_login != str(login_value):
             _append_trace(
                 trace,
@@ -248,7 +333,11 @@ def main() -> int:
                 expectedServer=server_value,
                 actualServer=canonical_server,
             )
-            return _emit_result({"ok": False, "error": f"MT5 canonical account identity mismatch after direct login: expected={login_value}, actual={canonical_login}", "trace": trace})
+            return _emit_result({
+                "ok": False,
+                "error": f"MT5 canonical account identity mismatch after direct login: expected={login_value}, actual={canonical_login}",
+                "trace": trace,
+            })
         if _normalize_server_identity(canonical_server) != _normalize_server_identity(server_value):
             _append_trace(
                 trace,
@@ -261,7 +350,11 @@ def main() -> int:
                 expectedServer=server_value,
                 actualServer=canonical_server,
             )
-            return _emit_result({"ok": False, "error": f"MT5 canonical account identity mismatch after direct login: expectedServer={server_value}, actualServer={canonical_server}", "trace": trace})
+            return _emit_result({
+                "ok": False,
+                "error": f"MT5 canonical account identity mismatch after direct login: expectedServer={server_value}, actualServer={canonical_server}",
+                "trace": trace,
+            })
 
         _append_trace(
             trace,
@@ -273,7 +366,13 @@ def main() -> int:
         )
         return _emit_result({"ok": True, "login": canonical_login, "server": canonical_server, "trace": trace})
     except Exception as exc:  # pragma: no cover
-        _append_trace(trace, "direct_unexpected_failed", "failed", f"隔离直登发生未预期错误: {exc}", error_code="SESSION_DIRECT_UNEXPECTED_FAILED")
+        _append_trace(
+            trace,
+            "direct_unexpected_failed",
+            "failed",
+            f"隔离直登发生未预期错误: {exc}",
+            error_code="SESSION_DIRECT_UNEXPECTED_FAILED",
+        )
         return _emit_result({"ok": False, "error": f"unexpected direct login failure: {exc}", "trace": trace})
     finally:
         if mt5_module is not None:

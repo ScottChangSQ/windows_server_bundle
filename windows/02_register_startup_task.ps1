@@ -7,7 +7,6 @@
 
 $ErrorActionPreference = "Stop"
 
-# 解析脚本运行根目录，兼容“完整仓库根目录”和“部署包根目录”。
 function Resolve-TaskLayout {
     param(
         [string]$RepoRootValue,
@@ -52,6 +51,55 @@ function Resolve-TaskLayout {
     throw "Runner script not found. Provide -RepoRoot <repo> or -BundleRoot <bundle>."
 }
 
+function Resolve-InteractiveTaskUser {
+    $userName = [System.Environment]::UserName
+    $userDomain = [System.Environment]::UserDomainName
+    if ([string]::IsNullOrWhiteSpace($userName)) {
+        return ""
+    }
+
+    $candidates = @(
+        [string]::Concat($userDomain, "\", $userName),
+        $userName
+    )
+    foreach ($candidate in $candidates) {
+        $normalized = ""
+        if ($null -ne $candidate) {
+            $normalized = $candidate.ToString().Trim().ToUpperInvariant()
+        }
+        if ([string]::IsNullOrWhiteSpace($normalized)) {
+            continue
+        }
+        if ($normalized -in @("SYSTEM", "NT AUTHORITY\\SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE")) {
+            continue
+        }
+        return $candidate.Trim()
+    }
+
+    return ""
+}
+
+function Resolve-TaskRegistrationProfile {
+    $interactiveUser = Resolve-InteractiveTaskUser
+    if (-not [string]::IsNullOrWhiteSpace($interactiveUser)) {
+        return [PSCustomObject]@{
+            Trigger = New-ScheduledTaskTrigger -AtLogOn -User $interactiveUser
+            Principal = New-ScheduledTaskPrincipal -UserId $interactiveUser -LogonType InteractiveToken -RunLevel Highest
+            LaunchMode = "interactive_user"
+            UserId = $interactiveUser
+            TriggerType = "AtLogOn"
+        }
+    }
+
+    return [PSCustomObject]@{
+        Trigger = New-ScheduledTaskTrigger -AtStartup
+        Principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+        LaunchMode = "service_account"
+        UserId = "SYSTEM"
+        TriggerType = "AtStartup"
+    }
+}
+
 $layout = Resolve-TaskLayout -RepoRootValue $RepoRoot -BundleRootValue $BundleRoot
 $runner = $layout.Runner
 
@@ -69,9 +117,10 @@ if ($layout.Layout -eq "bundle") {
 }
 $args = "-NoProfile -ExecutionPolicy Bypass -File `"$runner`" -" + $rootArgName + " `"" + $layout.Root + "`""
 $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $args
-$trigger = New-ScheduledTaskTrigger -AtStartup
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
-$principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+$registrationProfile = Resolve-TaskRegistrationProfile
+$trigger = $registrationProfile.Trigger
+$principal = $registrationProfile.Principal
 
 Register-ScheduledTask `
     -TaskName $TaskName `
@@ -81,4 +130,4 @@ Register-ScheduledTask `
     -Principal $principal | Out-Null
 
 Start-ScheduledTask -TaskName $TaskName
-Write-Host "Task '$TaskName' is registered and started."
+Write-Host ("Task '" + $TaskName + "' is registered and started. launchMode=" + $registrationProfile.LaunchMode + "; userId=" + $registrationProfile.UserId + "; trigger=" + $registrationProfile.TriggerType)

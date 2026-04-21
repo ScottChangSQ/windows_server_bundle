@@ -2842,6 +2842,85 @@ def _parse_mt5_gui_detection_payload(payload_text: str) -> Dict[str, Any]:
     }
 
 
+def _build_mt5_terminal_window_probe_command(path_value: Optional[str] = None) -> str:
+    """按精确路径探测 MT5 终端是否已进入可见交互会话并拥有窗口句柄。"""
+    normalized_target_path = _normalize_windows_executable_identity(str(path_value or ""))
+    return (
+        "$targetPath = "
+        + _ps_quote(normalized_target_path)
+        + "; "
+        + "$currentSessionId = [int](Get-Process -Id $PID -ErrorAction SilentlyContinue).SessionId; "
+        + "$interactiveSessionIds = @(); "
+        + "try { "
+        + "$interactiveSessionIds = @(Get-Process explorer -ErrorAction SilentlyContinue | Select-Object -ExpandProperty SessionId -Unique) "
+        + "} catch { $interactiveSessionIds = @() }; "
+        + "$normalizePath = { "
+        + "param([string]$value) "
+        + "if ([string]::IsNullOrWhiteSpace($value)) { return '' } "
+        + "return (($value -replace '\\\\', '/').ToLowerInvariant()) "
+        + "}; "
+        + "$items = @(); "
+        + "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { "
+        + "$_.Name -eq 'terminal64.exe' -or $_.Name -eq 'terminal.exe' -or $_.Name -eq 'terminal64' -or $_.Name -eq 'terminal' "
+        + "} | ForEach-Object { "
+        + "$rawExecutablePath = [string]$_.ExecutablePath; "
+        + "$normalizedExecutablePath = & $normalizePath ([string]$_.ExecutablePath); "
+        + "$processDetails = Get-Process -Id ([int]$_.ProcessId) -ErrorAction SilentlyContinue; "
+        + "$mainWindowHandle = 0; "
+        + "if ($processDetails) { $mainWindowHandle = [int64]$processDetails.MainWindowHandle }; "
+        + "$items += @{ "
+        + "processId = [int]$_.ProcessId; "
+        + "sessionId = [int]$_.SessionId; "
+        + "sameSession = ([int]$_.SessionId -eq $currentSessionId); "
+        + "interactiveSession = ($interactiveSessionIds -contains [int]$_.SessionId); "
+        + "mainWindowHandle = $mainWindowHandle; "
+        + "hasVisibleWindow = ($mainWindowHandle -gt 0); "
+        + "executablePath = $rawExecutablePath; "
+        + "normalizedExecutablePath = $normalizedExecutablePath; "
+        + "exactPath = (-not [string]::IsNullOrWhiteSpace($targetPath)) -and ($normalizedExecutablePath -eq $targetPath) "
+        + "} "
+        + "}; "
+        + "@{ "
+        + "currentSessionId = $currentSessionId; "
+        + "interactiveSessionIds = @($interactiveSessionIds); "
+        + "processCount = $items.Count; "
+        + "sameSessionCount = @($items | Where-Object { $_.sameSession }).Count; "
+        + "exactPathCount = @($items | Where-Object { $_.exactPath }).Count; "
+        + "interactiveSessionCount = @($items | Where-Object { $_.interactiveSession }).Count; "
+        + "visibleWindowCount = @($items | Where-Object { $_.hasVisibleWindow }).Count; "
+        + "interactiveVisibleWindowCount = @($items | Where-Object { $_.interactiveSession -and $_.hasVisibleWindow }).Count; "
+        + "items = $items "
+        + "} | ConvertTo-Json -Compress"
+    )
+
+
+def _parse_mt5_terminal_window_probe_payload(payload_text: str) -> Dict[str, Any]:
+    """解析 MT5 终端窗口探测结果。"""
+    try:
+        payload = json.loads(str(payload_text or "").strip() or "{}")
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    items = payload.get("items")
+    if not isinstance(items, list):
+        items = []
+    interactive_session_ids = payload.get("interactiveSessionIds")
+    if not isinstance(interactive_session_ids, list):
+        interactive_session_ids = []
+    return {
+        "currentSessionId": int(payload.get("currentSessionId") or 0),
+        "interactiveSessionIds": [int(item) for item in interactive_session_ids if str(item).strip()],
+        "processCount": int(payload.get("processCount") or 0),
+        "sameSessionCount": int(payload.get("sameSessionCount") or 0),
+        "exactPathCount": int(payload.get("exactPathCount") or 0),
+        "interactiveSessionCount": int(payload.get("interactiveSessionCount") or 0),
+        "visibleWindowCount": int(payload.get("visibleWindowCount") or 0),
+        "interactiveVisibleWindowCount": int(payload.get("interactiveVisibleWindowCount") or 0),
+        "items": items,
+    }
+
+
 def _inspect_mt5_gui_terminals(path_value: Optional[str] = None) -> Dict[str, Any]:
     """读取当前机器上 MT5 终端进程明细。"""
     completed = subprocess.run(
@@ -2868,6 +2947,90 @@ def _inspect_mt5_gui_terminals(path_value: Optional[str] = None) -> Dict[str, An
         }
     stdout_text = (completed.stdout or b"").decode("utf-8", errors="replace").strip()
     return _parse_mt5_gui_detection_payload(stdout_text)
+
+
+def _inspect_mt5_terminal_windows(path_value: Optional[str] = None) -> Dict[str, Any]:
+    """读取当前机器上 MT5 终端的窗口与交互会话状态。"""
+    completed = subprocess.run(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            _build_mt5_terminal_window_probe_command(path_value),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=15,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return {
+            "currentSessionId": 0,
+            "interactiveSessionIds": [],
+            "processCount": 0,
+            "sameSessionCount": 0,
+            "exactPathCount": 0,
+            "interactiveSessionCount": 0,
+            "visibleWindowCount": 0,
+            "interactiveVisibleWindowCount": 0,
+            "items": [],
+        }
+    stdout_text = (completed.stdout or b"").decode("utf-8", errors="replace").strip()
+    return _parse_mt5_terminal_window_probe_payload(stdout_text)
+
+
+def _resolve_visible_mt5_terminal_path(payload: Optional[Dict[str, Any]], preferred_path: Optional[str] = None) -> Optional[str]:
+    """只把已进入交互会话且拥有可见窗口的 MT5 终端视作直登可驱动实例。"""
+    normalized_preferred_path = _normalize_path(str(preferred_path or ""))
+    items = (dict(payload or {})).get("items")
+    if not isinstance(items, list):
+        items = []
+    visible_items: List[Dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if not bool(item.get("interactiveSession")):
+            continue
+        if not bool(item.get("hasVisibleWindow")):
+            continue
+        normalized_path = _normalize_path(str(item.get("executablePath") or ""))
+        if not normalized_path:
+            continue
+        normalized_item = dict(item)
+        normalized_item["normalizedExecutablePath"] = normalized_path
+        visible_items.append(normalized_item)
+    if normalized_preferred_path:
+        for item in visible_items:
+            if bool(item.get("exactPath")) or str(item.get("normalizedExecutablePath") or "") == normalized_preferred_path:
+                return normalized_preferred_path
+    if len(visible_items) == 1:
+        return str(visible_items[0].get("normalizedExecutablePath") or "").strip() or None
+    return None
+
+
+def _resolve_mt5_terminal_window_state(path_value: Optional[str], timeout_ms: int) -> Dict[str, Any]:
+    """轮询直到目标 MT5 终端真正进入可见交互会话，或超时返回最后一次探测结果。"""
+    deadline = time.monotonic() + max(0.5, float(timeout_ms or 0) / 1000.0)
+    latest_payload = _inspect_mt5_terminal_windows(path_value)
+    while True:
+        resolved_path = _resolve_visible_mt5_terminal_path(latest_payload, preferred_path=path_value)
+        if resolved_path:
+            return {
+                "ready": True,
+                "resolvedPath": resolved_path,
+                "payload": latest_payload,
+            }
+        if time.monotonic() >= deadline:
+            return {
+                "ready": False,
+                "resolvedPath": None,
+                "payload": latest_payload,
+            }
+        time.sleep(0.25)
+        latest_payload = _inspect_mt5_terminal_windows(path_value)
 
 
 def _resolve_attachable_mt5_gui_terminal_path(payload: Optional[Dict[str, Any]], preferred_path: Optional[str] = None) -> Optional[str]:
@@ -3818,6 +3981,59 @@ def _login_mt5_direct_with_input_credentials(*,
             "pathSource": terminal_path_source,
             "matchedCount": int(terminal_start_result.get("matchedCount") or 0),
         },
+    )
+
+    window_wait_timeout_ms = min(max(5000, int(MT5_INIT_TIMEOUT_MS / 3)), int(MT5_INIT_TIMEOUT_MS))
+    _append_session_diagnostic_entry(
+        request_id=request_id,
+        action=action,
+        stage="direct_terminal_window_wait_start",
+        status="pending",
+        message="开始确认 MT5 是否已进入可见交互会话并出现窗口",
+        server_time=_now_ms(),
+        detail={
+            "terminalPath": str(terminal_path or "").strip(),
+            "pathSource": terminal_path_source,
+            "timeoutMs": window_wait_timeout_ms,
+        },
+    )
+    terminal_window_state = _resolve_mt5_terminal_window_state(terminal_path, window_wait_timeout_ms)
+    terminal_window_payload = dict(terminal_window_state.get("payload") or {})
+    terminal_window_detail = {
+        "terminalPath": str(terminal_path or "").strip(),
+        "pathSource": terminal_path_source,
+        "currentSessionId": int(terminal_window_payload.get("currentSessionId") or 0),
+        "interactiveSessionIds": list(terminal_window_payload.get("interactiveSessionIds") or []),
+        "processCount": int(terminal_window_payload.get("processCount") or 0),
+        "sameSessionCount": int(terminal_window_payload.get("sameSessionCount") or 0),
+        "exactPathCount": int(terminal_window_payload.get("exactPathCount") or 0),
+        "interactiveSessionCount": int(terminal_window_payload.get("interactiveSessionCount") or 0),
+        "visibleWindowCount": int(terminal_window_payload.get("visibleWindowCount") or 0),
+        "interactiveVisibleWindowCount": int(terminal_window_payload.get("interactiveVisibleWindowCount") or 0),
+    }
+    if not bool(terminal_window_state.get("ready")):
+        _append_session_diagnostic_entry(
+            request_id=request_id,
+            action=action,
+            stage="direct_terminal_window_not_ready",
+            status="failed",
+            message="MT5 进程已启动，但未检测到可见交互窗口，无法确认当前前台终端可被驱动",
+            server_time=_now_ms(),
+            error_code="SESSION_DIRECT_TERMINAL_WINDOW_NOT_READY",
+            detail=terminal_window_detail,
+        )
+        raise RuntimeError(
+            "MT5 terminal started but no visible interactive window was detected; "
+            "the gateway may be launching MT5 in a non-interactive Windows session"
+        )
+    _append_session_diagnostic_entry(
+        request_id=request_id,
+        action=action,
+        stage="direct_terminal_window_ready",
+        status="ok",
+        message="已确认 MT5 终端进入可见交互会话",
+        server_time=_now_ms(),
+        detail=terminal_window_detail,
     )
 
     return _login_mt5_in_isolated_process(
