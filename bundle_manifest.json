@@ -1,10 +1,10 @@
 {
   "bundleName": "windows_server_bundle",
-  "generatedAt": "2026-04-22T03:16:48.344029+00:00",
-  "bundleFingerprint": "297dad2c2748165ece4e0dda597ec221d01e8b9b81a86a207025257b7c30b555",
+  "generatedAt": "2026-04-22T04:26:34.659005+00:00",
+  "bundleFingerprint": "a902a8667682a3a8c6b56f9efdbbf2fd72084bea1d30a29cb9e4bf20af45b79e",
   "fileHashes": {
     "deploy_bundle.cmd": "17de6b05ad6ec6b0adc0614c1e6240c8e55b8d6efe88f2ef65e808aa79e401bd",
-    "deploy_bundle.ps1": "9ff04e9ad45ec2e02fd2c363556a4211ac45a8cef1f6a6d72673b1b139c198f7",
+    "deploy_bundle.ps1": "dabfe134a48e474674470d75a104d886f1e9a32cdcd21f06ae1fb7b40be6835a",
     "mt5_gateway/.env.example": "47ee21fa3eb5e1f1fa3b06e4b344e1126678039216b63bd299ca53fd73fc2600",
     "mt5_gateway/admin_panel.py": "295bc74c65ce6115ec86922689045bf8dd4d798ecfaa4de96970aa7087d7e36a",
     "mt5_gateway/API.md": "a86d9988d97cac3cf5fa2bb5bbf613b216b4005657a24a37859b2b36b1f0b08e",
