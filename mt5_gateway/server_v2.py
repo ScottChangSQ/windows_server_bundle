@@ -210,6 +210,21 @@ session_runtime_credentials: Dict[str, Any] = {
     "password": "",
     "server": "",
 }
+# 服务器运行时交互状态：只记录最近发生的客户端事实，供状态面板直接读取。
+gateway_runtime_status: Dict[str, Any] = {
+    "streamClientsActive": 0,
+    "streamLastConnectedAt": 0,
+    "streamLastDisconnectedAt": 0,
+    "httpLastRequestAt": 0,
+    "httpLastRequestPath": "",
+    "sessionLastAction": "",
+    "sessionLastRequestAt": 0,
+    "sessionLastResult": "",
+    "tradeLastAction": "",
+    "tradeLastRequestAt": 0,
+    "tradeLastResult": "",
+    "lastClientAddress": "",
+}
 light_snapshot_build_condition = Condition(snapshot_cache_lock)
 light_snapshot_building = False
 session_snapshot_epoch = 0
@@ -270,6 +285,126 @@ BUNDLE_SCRIPT_PATH = str(BUNDLE_RUNTIME_INFO.get("bundleScriptPath") or "")
 
 def _now_ms() -> int:
     return int(datetime.now(timezone.utc).timestamp() * 1000)
+
+
+def _normalize_runtime_client_address(client_address: Any) -> str:
+    """把客户端来源压成可显示的单一字符串。"""
+    if client_address is None:
+        return ""
+    if isinstance(client_address, (tuple, list)) and client_address:
+        host = str(client_address[0] or "").strip()
+        port = ""
+        if len(client_address) > 1 and str(client_address[1] or "").strip():
+            port = str(client_address[1]).strip()
+        if host and port:
+            return f"{host}:{port}"
+        return host
+    host = str(getattr(client_address, "host", "") or "").strip()
+    port = str(getattr(client_address, "port", "") or "").strip()
+    if host and port:
+        return f"{host}:{port}"
+    if host:
+        return host
+    return str(client_address or "").strip()
+
+
+def _update_gateway_runtime_status(**fields: Any) -> None:
+    """在锁内原地更新运行时状态，避免并发下状态撕裂。"""
+    with state_lock:
+        for key, value in fields.items():
+            gateway_runtime_status[key] = value
+
+
+def _record_runtime_client_address(client_address: Any) -> None:
+    """记录最近一次可识别的客户端来源。"""
+    normalized = _normalize_runtime_client_address(client_address)
+    if normalized:
+        _update_gateway_runtime_status(lastClientAddress=normalized)
+
+
+def _record_runtime_http_request(path: str, client_address: Any = None) -> None:
+    """记录最近一次客户端 HTTP 请求事实。"""
+    _record_runtime_client_address(client_address)
+    _update_gateway_runtime_status(
+        httpLastRequestAt=_now_ms(),
+        httpLastRequestPath=str(path or "").strip(),
+    )
+
+
+def _record_runtime_session_action(action: str, result: str, client_address: Any = None) -> None:
+    """记录最近一次会话动作事实。"""
+    _record_runtime_client_address(client_address)
+    _update_gateway_runtime_status(
+        sessionLastAction=str(action or "").strip(),
+        sessionLastRequestAt=_now_ms(),
+        sessionLastResult=str(result or "").strip(),
+    )
+
+
+def _record_runtime_trade_action(action: str, result: str, client_address: Any = None) -> None:
+    """记录最近一次交易动作事实。"""
+    _record_runtime_client_address(client_address)
+    _update_gateway_runtime_status(
+        tradeLastAction=str(action or "").strip(),
+        tradeLastRequestAt=_now_ms(),
+        tradeLastResult=str(result or "").strip(),
+    )
+
+
+def _record_runtime_stream_connected(client_address: Any = None) -> None:
+    """记录 v2/stream 客户端已连接。"""
+    _record_runtime_client_address(client_address)
+    with state_lock:
+        current_active = max(0, int(gateway_runtime_status.get("streamClientsActive", 0) or 0))
+        gateway_runtime_status["streamClientsActive"] = current_active + 1
+        gateway_runtime_status["streamLastConnectedAt"] = _now_ms()
+
+
+def _record_runtime_stream_disconnected(client_address: Any = None) -> None:
+    """记录 v2/stream 客户端已断开。"""
+    _record_runtime_client_address(client_address)
+    with state_lock:
+        current_active = max(0, int(gateway_runtime_status.get("streamClientsActive", 0) or 0))
+        gateway_runtime_status["streamClientsActive"] = max(0, current_active - 1)
+        gateway_runtime_status["streamLastDisconnectedAt"] = _now_ms()
+
+
+def _build_gateway_runtime_status_payload() -> Dict[str, Any]:
+    """构建可直接返回给状态面板的运行时状态。"""
+    with state_lock:
+        return {
+            "streamClientsActive": max(0, int(gateway_runtime_status.get("streamClientsActive", 0) or 0)),
+            "streamLastConnectedAt": max(0, int(gateway_runtime_status.get("streamLastConnectedAt", 0) or 0)),
+            "streamLastDisconnectedAt": max(0, int(gateway_runtime_status.get("streamLastDisconnectedAt", 0) or 0)),
+            "httpLastRequestAt": max(0, int(gateway_runtime_status.get("httpLastRequestAt", 0) or 0)),
+            "httpLastRequestPath": str(gateway_runtime_status.get("httpLastRequestPath") or ""),
+            "sessionLastAction": str(gateway_runtime_status.get("sessionLastAction") or ""),
+            "sessionLastRequestAt": max(0, int(gateway_runtime_status.get("sessionLastRequestAt", 0) or 0)),
+            "sessionLastResult": str(gateway_runtime_status.get("sessionLastResult") or ""),
+            "tradeLastAction": str(gateway_runtime_status.get("tradeLastAction") or ""),
+            "tradeLastRequestAt": max(0, int(gateway_runtime_status.get("tradeLastRequestAt", 0) or 0)),
+            "tradeLastResult": str(gateway_runtime_status.get("tradeLastResult") or ""),
+            "lastClientAddress": str(gateway_runtime_status.get("lastClientAddress") or ""),
+        }
+
+
+def _build_runtime_panel_payload() -> Dict[str, Any]:
+    """构建给 Windows 状态面板使用的单次聚合快照。"""
+    diagnostic_items = session_diagnostic_store.latest_timeline("")
+    latest_diagnostic = diagnostic_items[-1] if diagnostic_items else {}
+    return {
+        "health": health(),
+        "source": source_status(),
+        "session": _build_verified_session_status_payload(verify_live_identity=False),
+        "runtime": _build_gateway_runtime_status_payload(),
+        "latestDiagnostic": {
+            "requestId": str(latest_diagnostic.get("requestId") or ""),
+            "stage": str(latest_diagnostic.get("stage") or ""),
+            "status": str(latest_diagnostic.get("status") or ""),
+            "message": str(latest_diagnostic.get("message") or ""),
+            "serverTime": int(latest_diagnostic.get("serverTime") or 0),
+        },
+    }
 
 
 # 统一生成 v2 同步 token，供快照、增量和 WS 消息复用。
@@ -3627,9 +3762,11 @@ def _read_lightweight_current_mt5_account_identity() -> Optional[Dict[str, str]]
         _shutdown_mt5()
 
 
-def _build_verified_session_status_payload() -> Dict[str, Any]:
-    """在返回 session status 前做一次轻量账号确认。"""
+def _build_verified_session_status_payload(verify_live_identity: bool = True) -> Dict[str, Any]:
+    """在返回 session status 前按需做一次轻量账号确认。"""
     status = session_manager.build_status_payload()
+    if not verify_live_identity:
+        return status
     active_account = (status or {}).get("activeAccount") or None
     if not isinstance(active_account, dict) or not active_account:
         return status
@@ -7240,14 +7377,16 @@ def source_status():
 
 
 @app.get("/v2/session/status")
-def v2_session_status():
+def v2_session_status(request: Optional[Request] = None):
     """返回当前会话状态。"""
+    _record_runtime_http_request("/v2/session/status", getattr(request, "client", None))
     return _build_verified_session_status_payload()
 
 
 @app.get("/v2/session/public-key")
-def v2_session_public_key():
+def v2_session_public_key(request: Optional[Request] = None):
     """返回登录信封公钥和当前会话摘要。"""
+    _record_runtime_http_request("/v2/session/public-key", getattr(request, "client", None))
     status = session_manager.build_status_payload()
     return session_envelope_crypto.build_public_key_payload(
         active_account=status.get("activeAccount"),
@@ -7281,10 +7420,11 @@ def _build_session_error_detail(
 
 
 @app.post("/v2/session/login")
-def v2_session_login(payload: Dict[str, Any]):
+def v2_session_login(payload: Dict[str, Any], request: Optional[Request] = None):
     """接收加密登录信封并登录新账号。"""
     safe_payload = dict(payload or {})
     request_id = str(safe_payload.get("requestId") or "")
+    _record_runtime_http_request("/v2/session/login", getattr(request, "client", None))
     _append_session_diagnostic_entry(
         request_id=request_id,
         action="login",
@@ -7328,8 +7468,10 @@ def v2_session_login(payload: Dict[str, Any]):
             message=str(payload.get("message") or "登录成功"),
             server_time=_now_ms(),
         )
+        _record_runtime_session_action("login", "ok", getattr(request, "client", None))
         return payload
     except ValueError as exc:
+        _record_runtime_session_action("login", "invalid", getattr(request, "client", None))
         _append_session_diagnostic_entry(
             request_id=request_id,
             action="login",
@@ -7341,6 +7483,7 @@ def v2_session_login(payload: Dict[str, Any]):
         )
         raise HTTPException(status_code=400, detail=_build_session_error_detail("SESSION_LOGIN_INVALID", str(exc), request_id=request_id))
     except Mt5AccountSwitchFlowError as exc:
+        _record_runtime_session_action("login", "failed", getattr(request, "client", None))
         raise HTTPException(
             status_code=502,
             detail=_build_session_error_detail(
@@ -7351,6 +7494,7 @@ def v2_session_login(payload: Dict[str, Any]):
             ),
         )
     except Exception as exc:
+        _record_runtime_session_action("login", "failed", getattr(request, "client", None))
         _append_session_diagnostic_entry(
             request_id=request_id,
             action="login",
@@ -7364,12 +7508,14 @@ def v2_session_login(payload: Dict[str, Any]):
 
 
 @app.post("/v2/session/switch")
-def v2_session_switch(payload: Dict[str, Any]):
+def v2_session_switch(payload: Dict[str, Any], request: Optional[Request] = None):
     """切换到已保存账号。"""
     safe_payload = dict(payload or {})
     request_id = str(safe_payload.get("requestId") or "")
     profile_id = str(safe_payload.get("accountProfileId") or safe_payload.get("profileId") or "").strip()
+    _record_runtime_http_request("/v2/session/switch", getattr(request, "client", None))
     if not profile_id:
+        _record_runtime_session_action("switch", "invalid", getattr(request, "client", None))
         raise HTTPException(status_code=400, detail="accountProfileId is required")
     _append_session_diagnostic_entry(
         request_id=request_id,
@@ -7390,8 +7536,10 @@ def v2_session_switch(payload: Dict[str, Any]):
             message=str(switch_payload.get("message") or "切换成功"),
             server_time=_now_ms(),
         )
+        _record_runtime_session_action("switch", "ok", getattr(request, "client", None))
         return switch_payload
     except ValueError as exc:
+        _record_runtime_session_action("switch", "invalid", getattr(request, "client", None))
         _append_session_diagnostic_entry(
             request_id=request_id,
             action="switch",
@@ -7403,6 +7551,7 @@ def v2_session_switch(payload: Dict[str, Any]):
         )
         raise HTTPException(status_code=400, detail=_build_session_error_detail("SESSION_SWITCH_INVALID", str(exc), request_id=request_id))
     except Mt5AccountSwitchFlowError as exc:
+        _record_runtime_session_action("switch", "failed", getattr(request, "client", None))
         raise HTTPException(
             status_code=502,
             detail=_build_session_error_detail(
@@ -7413,6 +7562,7 @@ def v2_session_switch(payload: Dict[str, Any]):
             ),
         )
     except Exception as exc:
+        _record_runtime_session_action("switch", "failed", getattr(request, "client", None))
         _append_session_diagnostic_entry(
             request_id=request_id,
             action="switch",
@@ -7426,29 +7576,39 @@ def v2_session_switch(payload: Dict[str, Any]):
 
 
 @app.post("/v2/session/logout")
-def v2_session_logout(payload: Dict[str, Any]):
+def v2_session_logout(payload: Dict[str, Any], request: Optional[Request] = None):
     """退出当前激活账号。"""
     request_id = str((payload or {}).get("requestId") or "")
-    return session_manager.logout_current_session(request_id=request_id)
+    _record_runtime_http_request("/v2/session/logout", getattr(request, "client", None))
+    try:
+        result = session_manager.logout_current_session(request_id=request_id)
+        _record_runtime_session_action("logout", "ok" if bool((result or {}).get("ok")) else "failed", getattr(request, "client", None))
+        return result
+    except Exception:
+        _record_runtime_session_action("logout", "failed", getattr(request, "client", None))
+        raise
 
 
 @app.get("/v2/session/diagnostic/latest")
-def v2_session_diagnostic_latest(requestId: str = Query(default="")):
+def v2_session_diagnostic_latest(requestId: str = Query(default=""), request: Optional[Request] = None):
     """返回最近一次或指定 requestId 的会话诊断时间线。"""
+    _record_runtime_http_request("/v2/session/diagnostic/latest", getattr(request, "client", None))
     items = session_diagnostic_store.latest_timeline(requestId)
     return _build_session_diagnostic_payload(items)
 
 
 @app.get("/v2/session/diagnostic/lookup")
-def v2_session_diagnostic_lookup(requestId: str = Query(default="")):
+def v2_session_diagnostic_lookup(requestId: str = Query(default=""), request: Optional[Request] = None):
     """按 requestId 返回完整会话诊断时间线。"""
+    _record_runtime_http_request("/v2/session/diagnostic/lookup", getattr(request, "client", None))
     items = session_diagnostic_store.lookup(requestId)
     return _build_session_diagnostic_payload(items)
 
 
 @app.get("/v2/market/snapshot")
-def v2_market_snapshot():
+def v2_market_snapshot(request: Optional[Request] = None):
     try:
+        _record_runtime_http_request("/v2/market/snapshot", getattr(request, "client", None))
         now_ms = _now_ms()
         session_status = session_manager.build_status_payload()
         active_account = (session_status or {}).get("activeAccount") or None
@@ -7470,8 +7630,10 @@ def v2_market_candles(symbol: str,
                       interval: str,
                       limit: int = Query(default=300, ge=1, le=1500),
                       startTime: int = Query(default=0, ge=0),
-                      endTime: int = Query(default=0, ge=0)):
+                      endTime: int = Query(default=0, ge=0),
+                      request: Optional[Request] = None):
     try:
+        _record_runtime_http_request("/v2/market/candles", getattr(request, "client", None))
         now_ms = _now_ms()
         rest_rows = _fetch_market_candle_rows_with_cache(
             symbol,
@@ -7504,8 +7666,9 @@ def v2_market_candles(symbol: str,
 
 
 @app.get("/v2/account/snapshot")
-def v2_account_snapshot():
+def v2_account_snapshot(request: Optional[Request] = None):
     try:
+        _record_runtime_http_request("/v2/account/snapshot", getattr(request, "client", None))
         now_ms = _now_ms()
         session_status = session_manager.build_status_payload()
         active_account = (session_status or {}).get("activeAccount") or None
@@ -7557,8 +7720,10 @@ def v2_account_snapshot():
 def v2_account_history(
     range: str = Query(default="all", pattern="^(1d|7d|1m|3m|1y|all)$"),
     cursor: str = Query(default=""),
+    request: Optional[Request] = None,
 ):
     try:
+        _record_runtime_http_request("/v2/account/history", getattr(request, "client", None))
         now_ms = _now_ms()
         range_key = range.lower()
         session_status = session_manager.build_status_payload()
@@ -7594,8 +7759,9 @@ def v2_account_history(
 
 
 @app.get("/v2/account/full")
-def v2_account_full():
+def v2_account_full(request: Optional[Request] = None):
     try:
+        _record_runtime_http_request("/v2/account/full", getattr(request, "client", None))
         now_ms = _now_ms()
         session_status = session_manager.build_status_payload()
         active_account = (session_status or {}).get("activeAccount") or None
@@ -7632,7 +7798,8 @@ def v2_account_full():
 
 
 @app.post("/v2/trade/check")
-def v2_trade_check(payload: Dict[str, Any]):
+def v2_trade_check(payload: Dict[str, Any], request: Optional[Request] = None):
+    _record_runtime_http_request("/v2/trade/check", getattr(request, "client", None))
     try:
         now_ms = _now_ms()
         account_mode = _detect_account_mode()
@@ -7685,6 +7852,7 @@ def v2_trade_check(payload: Dict[str, Any]):
             message="检查通过" if check_error is None else str((check_error or {}).get("message") or "检查未通过"),
             server_time=now_ms,
         )
+        _record_runtime_trade_action("check", str(response.get("status") or ""), getattr(request, "client", None))
         return response
     except Exception as exc:
         now_ms = _now_ms()
@@ -7707,11 +7875,13 @@ def v2_trade_check(payload: Dict[str, Any]):
             message=str(exc),
             server_time=now_ms,
         )
+        _record_runtime_trade_action("check", str(response.get("status") or "FAILED"), getattr(request, "client", None))
         return response
 
 
 @app.post("/v2/trade/submit")
-def v2_trade_submit(payload: Dict[str, Any]):
+def v2_trade_submit(payload: Dict[str, Any], request: Optional[Request] = None):
+    _record_runtime_http_request("/v2/trade/submit", getattr(request, "client", None))
     now_ms = _now_ms()
     account_mode = _detect_account_mode()
     prepared = _prepare_trade_command(payload or {}, account_mode)
@@ -7748,6 +7918,7 @@ def v2_trade_submit(payload: Dict[str, Any]):
                 message=str((response.get("error") or {}).get("message") or "交易失败"),
                 server_time=now_ms,
             )
+            _record_runtime_trade_action("submit", str(response.get("status") or ""), getattr(request, "client", None))
             return response
         response = v2_trade_models.build_trade_submit_response(
             request_id=request_id,
@@ -7772,6 +7943,7 @@ def v2_trade_submit(payload: Dict[str, Any]):
             message=str((response.get("error") or {}).get("message") or "重复 requestId，已按幂等返回"),
             server_time=now_ms,
         )
+        _record_runtime_trade_action("submit", str(response.get("status") or ""), getattr(request, "client", None))
         return response
 
     prepare_error = prepared.get("error")
@@ -7797,6 +7969,7 @@ def v2_trade_submit(payload: Dict[str, Any]):
             message=str((response.get("error") or {}).get("message") or "交易失败"),
             server_time=now_ms,
         )
+        _record_runtime_trade_action("submit", str(response.get("status") or ""), getattr(request, "client", None))
         return response
 
     try:
@@ -7823,6 +7996,7 @@ def v2_trade_submit(payload: Dict[str, Any]):
             message=str(exc),
             server_time=now_ms,
         )
+        _record_runtime_trade_action("submit", str(response.get("status") or ""), getattr(request, "client", None))
         return response
 
     check_error = v2_trade_models.error_from_retcode(
@@ -7851,6 +8025,7 @@ def v2_trade_submit(payload: Dict[str, Any]):
             message=str((response.get("error") or {}).get("message") or "交易失败"),
             server_time=now_ms,
         )
+        _record_runtime_trade_action("submit", str(response.get("status") or ""), getattr(request, "client", None))
         return response
 
     try:
@@ -7877,6 +8052,7 @@ def v2_trade_submit(payload: Dict[str, Any]):
             message=str((response.get("error") or {}).get("message") or str(exc)),
             server_time=now_ms,
         )
+        _record_runtime_trade_action("submit", str(response.get("status") or ""), getattr(request, "client", None))
         return response
 
     send_error = v2_trade_models.error_from_retcode(
@@ -7904,6 +8080,7 @@ def v2_trade_submit(payload: Dict[str, Any]):
         message="交易已受理" if send_error is None else str((response.get("error") or {}).get("message") or "交易失败"),
         server_time=now_ms,
     )
+    _record_runtime_trade_action("submit", str(response.get("status") or ""), getattr(request, "client", None))
     if send_error is None:
         _invalidate_account_runtime_cache_after_trade_commit()
         _publish_account_trade_commit_sync_state()
@@ -7911,7 +8088,8 @@ def v2_trade_submit(payload: Dict[str, Any]):
 
 
 @app.get("/v2/trade/result")
-def v2_trade_result(requestId: str = Query(default="")):
+def v2_trade_result(requestId: str = Query(default=""), request: Optional[Request] = None):
+    _record_runtime_http_request("/v2/trade/result", getattr(request, "client", None))
     request_id = str(requestId or "").strip()
     if not request_id:
         _record_single_trade_audit(
@@ -7955,7 +8133,8 @@ def v2_trade_result(requestId: str = Query(default="")):
 
 
 @app.post("/v2/trade/batch/submit")
-def v2_trade_batch_submit(payload: Dict[str, Any]):
+def v2_trade_batch_submit(payload: Dict[str, Any], request: Optional[Request] = None):
+    _record_runtime_http_request("/v2/trade/batch/submit", getattr(request, "client", None))
     now_ms = _now_ms()
     account_mode = _detect_account_mode()
     result = v2_trade_batch.submit_trade_batch(
@@ -7978,6 +8157,7 @@ def v2_trade_batch_submit(payload: Dict[str, Any]):
         message=str((result.get("error") or {}).get("message") or result.get("status") or "批量提交完成"),
         server_time=int(result.get("serverTime") or now_ms),
     )
+    _record_runtime_trade_action("batch_submit", str(result.get("status") or ""), getattr(request, "client", None))
     if str(result.get("status") or "") in {v2_trade_models.STATUS_ACCEPTED, v2_trade_models.STATUS_PARTIAL}:
         _invalidate_account_runtime_cache_after_trade_commit()
         _publish_account_trade_commit_sync_state()
@@ -7985,7 +8165,8 @@ def v2_trade_batch_submit(payload: Dict[str, Any]):
 
 
 @app.get("/v2/trade/batch/result")
-def v2_trade_batch_result(batchId: str = Query(default="")):
+def v2_trade_batch_result(batchId: str = Query(default=""), request: Optional[Request] = None):
+    _record_runtime_http_request("/v2/trade/batch/result", getattr(request, "client", None))
     batch_id = str(batchId or "").strip()
     if not batch_id:
         _record_batch_trade_audit(
@@ -8221,6 +8402,18 @@ def admin_cache_clear():
     return {"ok": True, "cleared": cleared}
 
 
+@app.get("/internal/runtime/status")
+def internal_runtime_status():
+    """返回状态面板需要的运行时交互真值。"""
+    return _build_gateway_runtime_status_payload()
+
+
+@app.get("/internal/runtime/panel")
+def internal_runtime_panel():
+    """返回状态面板需要的一次性聚合快照。"""
+    return _build_runtime_panel_payload()
+
+
 @app.websocket("/binance-ws/{path_value:path}")
 async def binance_ws_proxy(client: WebSocket, path_value: str):
     await _proxy_binance_websocket(client, path_value)
@@ -8229,6 +8422,7 @@ async def binance_ws_proxy(client: WebSocket, path_value: str):
 @app.websocket("/v2/stream")
 async def v2_stream(client: WebSocket):
     await client.accept()
+    _record_runtime_stream_connected(getattr(client, "client", None))
     current_bus_seq = 0
     push_interval_sec = float(V2_STREAM_PUSH_INTERVAL_MS) / 1000.0
     loop = asyncio.get_running_loop()
@@ -8246,8 +8440,10 @@ async def v2_stream(client: WebSocket):
             else:
                 next_tick = loop.time()
     except WebSocketDisconnect:
+        _record_runtime_stream_disconnected(getattr(client, "client", None))
         return
     except Exception as exc:
+        _record_runtime_stream_disconnected(getattr(client, "client", None))
         try:
             await client.close(code=1011, reason=f"v2 stream failed: {exc}")
         except Exception:

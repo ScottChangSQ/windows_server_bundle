@@ -1088,15 +1088,191 @@ function Show-DeployWindow {
         ) `
         -PassThru
 
+    function Format-StatusTimestamp {
+        param([long]$Value)
+
+        $safeValue = [int64]($Value | ForEach-Object { $_ })
+        if ($safeValue -le 0) {
+            return "无"
+        }
+        try {
+            return [DateTimeOffset]::FromUnixTimeMilliseconds($safeValue).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
+        }
+        catch {
+            return [string]$safeValue
+        }
+    }
+
+    function Get-TaskStateText {
+        param([string]$TaskName)
+
+        try {
+            $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+            $state = [string]$task.State
+            if ([string]::IsNullOrWhiteSpace($state)) {
+                $taskInfo = Get-ScheduledTaskInfo -TaskName $TaskName -ErrorAction SilentlyContinue
+                if ($taskInfo) {
+                    $state = [string]$taskInfo.State
+                }
+            }
+            if ([string]::IsNullOrWhiteSpace($state)) {
+                $state = "已注册"
+            }
+            return $TaskName + "：" + $state
+        }
+        catch {
+            return $TaskName + "：未找到"
+        }
+    }
+
+    function Get-PortStateText {
+        param([int]$Port)
+
+        try {
+            $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction Stop)
+            if ($listeners.Count -gt 0) {
+                return "端口 " + $Port + "：监听中"
+            }
+        }
+        catch {
+        }
+        return "端口 " + $Port + "：未监听"
+    }
+
+    function Invoke-JsonStatusRequest {
+        param([string]$Url)
+
+        try {
+            $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 5
+            if ([string]::IsNullOrWhiteSpace([string]$response.Content)) {
+                return $null
+            }
+            return $response.Content | ConvertFrom-Json
+        }
+        catch {
+            return [PSCustomObject]@{
+                __error = $_.Exception.Message
+            }
+        }
+    }
+
+    function Build-RuntimeStatusText {
+        $panel = Invoke-JsonStatusRequest -Url "http://127.0.0.1:8787/internal/runtime/panel"
+        $health = if ($panel -and [string]::IsNullOrWhiteSpace([string]$panel.__error)) { $panel.health } else { $null }
+        $source = if ($panel -and [string]::IsNullOrWhiteSpace([string]$panel.__error)) { $panel.source } else { $null }
+        $session = if ($panel -and [string]::IsNullOrWhiteSpace([string]$panel.__error)) { $panel.session } else { $null }
+        $diagnostic = if ($panel -and [string]::IsNullOrWhiteSpace([string]$panel.__error)) { $panel.latestDiagnostic } else { $null }
+        $runtime = if ($panel -and [string]::IsNullOrWhiteSpace([string]$panel.__error)) { $panel.runtime } else { $null }
+
+        $lines = @()
+        $lines += "本地部署状态"
+        $lines += ("- " + (Get-PortStateText -Port 8787))
+        $lines += ("- " + (Get-PortStateText -Port 8788))
+        $lines += ("- " + (Get-PortStateText -Port 80))
+        $lines += ("- " + (Get-PortStateText -Port 443))
+        $lines += ("- " + (Get-TaskStateText -TaskName "MT5GatewayAutoStart"))
+        $lines += ("- " + (Get-TaskStateText -TaskName "MT5AdminPanelAutoStart"))
+        if ($health -and -not [string]::IsNullOrWhiteSpace([string]$health.bundleFingerprint)) {
+            $lines += ("- bundleFingerprint：" + [string]$health.bundleFingerprint)
+        }
+        elseif ($panel -and -not [string]::IsNullOrWhiteSpace([string]$panel.__error)) {
+            $lines += ("- 状态聚合读取错误：" + [string]$panel.__error)
+        }
+
+        $lines += ""
+        $lines += "行情连接状态"
+        if ($source -and [string]::IsNullOrWhiteSpace([string]$source.__error)) {
+            $lines += ("- 模式：" + [string]$source.marketRuntimeMode)
+            $lines += ("- 已连接：" + [string]([bool]$source.marketRuntimeConnected))
+            $lines += ("- 重连中：" + [string]([bool]$source.marketRuntimeConnecting))
+            $lines += ("- 最近更新时间：" + (Format-StatusTimestamp -Value ([int64]($source.marketRuntimeUpdatedAt | ForEach-Object { $_ }))))
+            $lines += ("- 最近错误：" + [string]$source.marketRuntimeLastError)
+        }
+        else {
+            if ($panel -and -not [string]::IsNullOrWhiteSpace([string]$panel.__error)) {
+                $lines += ("- 读取失败：" + [string]($panel.__error))
+            }
+            else {
+                $lines += "- 读取失败：无数据"
+            }
+        }
+
+        $lines += ""
+        $lines += "账户连接状态"
+        if ($health -and [string]::IsNullOrWhiteSpace([string]$health.__error)) {
+            $lines += ("- MT5 已配置：" + [string]([bool]$health.mt5Configured))
+            $lines += ("- MT5 已连接：" + [string]([bool]$health.mt5Connected))
+            $lines += ("- 最近终端路径：" + [string]$health.mt5LastConnectedPath)
+        }
+        else {
+            if ($panel -and -not [string]::IsNullOrWhiteSpace([string]$panel.__error)) {
+                $lines += ("- 健康检查读取失败：" + [string]($panel.__error))
+            }
+            else {
+                $lines += "- 健康检查读取失败：无数据"
+            }
+        }
+        if ($session -and [string]::IsNullOrWhiteSpace([string]$session.__error)) {
+            $activeAccount = $session.activeAccount
+            $activeLogin = ""
+            $activeServer = ""
+            if ($activeAccount) {
+                $activeLogin = [string]$activeAccount.login
+                $activeServer = [string]$activeAccount.server
+            }
+            $lines += ("- 会话状态：" + [string]$session.state)
+            $lines += ("- 当前活动账号：" + $activeLogin + " / " + $activeServer)
+        }
+        else {
+            if ($panel -and -not [string]::IsNullOrWhiteSpace([string]$panel.__error)) {
+                $lines += ("- 会话状态读取失败：" + [string]($panel.__error))
+            }
+            else {
+                $lines += "- 会话状态读取失败：无数据"
+            }
+        }
+        if ($diagnostic) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$diagnostic.stage)) {
+                $lines += ("- 最近诊断阶段：" + [string]$diagnostic.stage)
+                $lines += ("- 最近诊断消息：" + [string]$diagnostic.message)
+            }
+            else {
+                $lines += "- 最近诊断阶段：无"
+            }
+        }
+
+        $lines += ""
+        $lines += "手机 APP 交互状态"
+        if ($runtime -and [string]::IsNullOrWhiteSpace([string]$runtime.__error)) {
+            $lines += ("- 活跃 stream 客户端：" + [string]$runtime.streamClientsActive)
+            $lines += ("- 最近连接时间：" + (Format-StatusTimestamp -Value ([int64]($runtime.streamLastConnectedAt | ForEach-Object { $_ }))))
+            $lines += ("- 最近断开时间：" + (Format-StatusTimestamp -Value ([int64]($runtime.streamLastDisconnectedAt | ForEach-Object { $_ }))))
+            $lines += ("- 最近普通请求：" + [string]$runtime.httpLastRequestPath + " @ " + (Format-StatusTimestamp -Value ([int64]($runtime.httpLastRequestAt | ForEach-Object { $_ }))))
+            $lines += ("- 最近会话动作：" + [string]$runtime.sessionLastAction + " / " + [string]$runtime.sessionLastResult + " @ " + (Format-StatusTimestamp -Value ([int64]($runtime.sessionLastRequestAt | ForEach-Object { $_ }))))
+            $lines += ("- 最近交易动作：" + [string]$runtime.tradeLastAction + " / " + [string]$runtime.tradeLastResult + " @ " + (Format-StatusTimestamp -Value ([int64]($runtime.tradeLastRequestAt | ForEach-Object { $_ }))))
+            $lines += ("- 最近客户端来源：" + [string]$runtime.lastClientAddress)
+        }
+        else {
+            if ($panel -and -not [string]::IsNullOrWhiteSpace([string]$panel.__error)) {
+                $lines += ("- 读取失败：" + [string]($panel.__error))
+            }
+            else {
+                $lines += "- 读取失败：无数据"
+            }
+        }
+
+        return ($lines -join "`r`n")
+    }
+
     $form = New-Object System.Windows.Forms.Form
-    $form.Text = "MT5 部署状态"
+    $form.Text = "MT5 部署与连接状态"
     $form.StartPosition = "CenterScreen"
-    $form.Size = New-Object System.Drawing.Size(1000, 720)
-    $form.MinimumSize = New-Object System.Drawing.Size(900, 640)
+    $form.Size = New-Object System.Drawing.Size(1000, 1080)
+    $form.MinimumSize = New-Object System.Drawing.Size(920, 980)
     $form.TopMost = $true
 
     $titleLabel = New-Object System.Windows.Forms.Label
-    $titleLabel.Text = "MT5 / 面板 / Caddy 一键重部署"
+    $titleLabel.Text = "MT5 部署与连接状态"
     $titleLabel.Location = New-Object System.Drawing.Point(16, 14)
     $titleLabel.Size = New-Object System.Drawing.Size(620, 26)
     $titleLabel.Font = New-Object System.Drawing.Font("Microsoft YaHei UI", 13, [System.Drawing.FontStyle]::Bold)
@@ -1116,7 +1292,7 @@ function Show-DeployWindow {
 
     $stepList = New-Object System.Windows.Forms.ListView
     $stepList.Location = New-Object System.Drawing.Point(16, 104)
-    $stepList.Size = New-Object System.Drawing.Size(950, 260)
+    $stepList.Size = New-Object System.Drawing.Size(950, 220)
     $stepList.View = [System.Windows.Forms.View]::Details
     $stepList.FullRowSelect = $true
     $stepList.GridLines = $true
@@ -1125,15 +1301,31 @@ function Show-DeployWindow {
     $stepList.Columns.Add("说明", 630) | Out-Null
     $form.Controls.Add($stepList)
 
+    $runtimeLabel = New-Object System.Windows.Forms.Label
+    $runtimeLabel.Text = "运行中（状态每 1 秒刷新）"
+    $runtimeLabel.Location = New-Object System.Drawing.Point(16, 338)
+    $runtimeLabel.Size = New-Object System.Drawing.Size(240, 22)
+    $form.Controls.Add($runtimeLabel)
+
+    $runtimeBox = New-Object System.Windows.Forms.TextBox
+    $runtimeBox.Location = New-Object System.Drawing.Point(16, 364)
+    $runtimeBox.Size = New-Object System.Drawing.Size(950, 300)
+    $runtimeBox.Multiline = $true
+    $runtimeBox.ScrollBars = "Vertical"
+    $runtimeBox.ReadOnly = $true
+    $runtimeBox.Font = New-Object System.Drawing.Font("Consolas", 10)
+    $runtimeBox.Text = "等待部署完成"
+    $form.Controls.Add($runtimeBox)
+
     $detailLabel = New-Object System.Windows.Forms.Label
     $detailLabel.Text = "执行日志"
-    $detailLabel.Location = New-Object System.Drawing.Point(16, 376)
+    $detailLabel.Location = New-Object System.Drawing.Point(16, 676)
     $detailLabel.Size = New-Object System.Drawing.Size(120, 22)
     $form.Controls.Add($detailLabel)
 
     $logBox = New-Object System.Windows.Forms.TextBox
-    $logBox.Location = New-Object System.Drawing.Point(16, 402)
-    $logBox.Size = New-Object System.Drawing.Size(950, 230)
+    $logBox.Location = New-Object System.Drawing.Point(16, 702)
+    $logBox.Size = New-Object System.Drawing.Size(950, 250)
     $logBox.Multiline = $true
     $logBox.ScrollBars = "Vertical"
     $logBox.ReadOnly = $true
@@ -1142,7 +1334,7 @@ function Show-DeployWindow {
 
     $closeButton = New-Object System.Windows.Forms.Button
     $closeButton.Text = "关闭窗口"
-    $closeButton.Location = New-Object System.Drawing.Point(836, 644)
+    $closeButton.Location = New-Object System.Drawing.Point(836, 964)
     $closeButton.Size = New-Object System.Drawing.Size(130, 30)
     $closeButton.Add_Click({ $form.Close() })
     $form.Controls.Add($closeButton)
@@ -1160,7 +1352,12 @@ function Show-DeployWindow {
                     $state = $null
                 }
                 if ($state) {
-                    $statusLabel.Text = "状态：" + $state.overallStatus + " | " + $state.message
+                    if ([string]$state.overallStatus -eq "success") {
+                        $statusLabel.Text = "状态：运行中 | 运行中（状态每 1 秒刷新）"
+                    }
+                    else {
+                        $statusLabel.Text = "状态：" + $state.overallStatus + " | " + $state.message
+                    }
                     $stepList.BeginUpdate()
                     $stepList.Items.Clear()
                     foreach ($step in @($state.steps)) {
@@ -1171,8 +1368,15 @@ function Show-DeployWindow {
                     }
                     $stepList.EndUpdate()
 
-                    if ($state.overallStatus -ne "running") {
+                    if ($state.overallStatus -eq "success") {
+                        $runtimeBox.Text = Build-RuntimeStatusText
+                    }
+                    elseif ($state.overallStatus -ne "running") {
                         $statusLabel.Text = "状态：" + $state.overallStatus + " | " + $state.message
+                        $runtimeBox.Text = "等待部署完成"
+                    }
+                    else {
+                        $runtimeBox.Text = "等待部署完成"
                     }
                 }
             }

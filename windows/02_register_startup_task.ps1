@@ -115,7 +115,7 @@ $rootArgName = "RepoRoot"
 if ($layout.Layout -eq "bundle") {
     $rootArgName = "BundleRoot"
 }
-$args = "-NoProfile -ExecutionPolicy Bypass -File `"$runner`" -" + $rootArgName + " `"" + $layout.Root + "`""
+$args = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$runner`" -" + $rootArgName + " `"" + $layout.Root + "`""
 $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $args
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
 $registrationProfile = Resolve-TaskRegistrationProfile
