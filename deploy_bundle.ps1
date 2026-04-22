@@ -1305,7 +1305,7 @@ function Show-DeployWindow {
 
     $stepList = New-Object System.Windows.Forms.ListView
     $stepList.Location = New-Object System.Drawing.Point(16, 104)
-    $stepList.Size = New-Object System.Drawing.Size(950, 220)
+    $stepList.Size = New-Object System.Drawing.Size(950, 150)
     $stepList.View = [System.Windows.Forms.View]::Details
     $stepList.FullRowSelect = $true
     $stepList.GridLines = $true
@@ -1316,34 +1316,36 @@ function Show-DeployWindow {
 
     $runtimeLabel = New-Object System.Windows.Forms.Label
     $runtimeLabel.Text = "运行状态（仅内容变化时刷新，后台每 1 秒检查）"
-    $runtimeLabel.Location = New-Object System.Drawing.Point(16, 338)
+    $runtimeLabel.Location = New-Object System.Drawing.Point(16, 270)
     $runtimeLabel.Size = New-Object System.Drawing.Size(360, 22)
     $form.Controls.Add($runtimeLabel)
 
-    $runtimeBox = New-Object System.Windows.Forms.TextBox
-    $runtimeBox.Location = New-Object System.Drawing.Point(16, 364)
-    $runtimeBox.Size = New-Object System.Drawing.Size(950, 250)
-    $runtimeBox.Multiline = $true
+    $runtimeBox = New-Object System.Windows.Forms.RichTextBox
+    $runtimeBox.Location = New-Object System.Drawing.Point(16, 296)
+    $runtimeBox.Size = New-Object System.Drawing.Size(950, 300)
     $runtimeBox.ScrollBars = "Vertical"
     $runtimeBox.ReadOnly = $true
     $runtimeBox.HideSelection = $false
+    $runtimeBox.DetectUrls = $false
+    $runtimeBox.WordWrap = $false
     $runtimeBox.Font = New-Object System.Drawing.Font("Consolas", 10)
     $runtimeBox.Text = "等待部署完成"
     $form.Controls.Add($runtimeBox)
 
     $detailLabel = New-Object System.Windows.Forms.Label
     $detailLabel.Text = "执行日志（仅内容变化时刷新）"
-    $detailLabel.Location = New-Object System.Drawing.Point(16, 626)
+    $detailLabel.Location = New-Object System.Drawing.Point(16, 608)
     $detailLabel.Size = New-Object System.Drawing.Size(240, 22)
     $form.Controls.Add($detailLabel)
 
-    $logBox = New-Object System.Windows.Forms.TextBox
-    $logBox.Location = New-Object System.Drawing.Point(16, 652)
-    $logBox.Size = New-Object System.Drawing.Size(950, 300)
-    $logBox.Multiline = $true
+    $logBox = New-Object System.Windows.Forms.RichTextBox
+    $logBox.Location = New-Object System.Drawing.Point(16, 634)
+    $logBox.Size = New-Object System.Drawing.Size(950, 318)
     $logBox.ScrollBars = "Vertical"
     $logBox.ReadOnly = $true
     $logBox.HideSelection = $false
+    $logBox.DetectUrls = $false
+    $logBox.WordWrap = $false
     $logBox.Font = New-Object System.Drawing.Font("Consolas", 10)
     $form.Controls.Add($logBox)
 
@@ -1362,9 +1364,15 @@ function Show-DeployWindow {
     $pendingLogText = $null
     $lastState = $null
 
+    function Test-TextPanelInteractionActive {
+        param([System.Windows.Forms.TextBoxBase]$TextBox)
+
+        return ($TextBox.ContainsFocus -or $TextBox.Capture)
+    }
+
     function Update-TextBoxIfChanged {
         param(
-            [System.Windows.Forms.TextBox]$TextBox,
+            [System.Windows.Forms.TextBoxBase]$TextBox,
             [string]$NewText,
             [switch]$AutoScrollToEnd,
             [ref]$LastAppliedText,
@@ -1377,7 +1385,7 @@ function Show-DeployWindow {
         }
 
         $PendingText.Value = $safeText
-        if ($TextBox.Focused) {
+        if (Test-TextPanelInteractionActive -TextBox $TextBox) {
             return
         }
 
