@@ -1354,7 +1354,7 @@ function Show-DeployWindow {
 
     $stepList = New-Object System.Windows.Forms.ListView
     $stepList.Location = New-Object System.Drawing.Point(16, 104)
-    $stepList.Size = New-Object System.Drawing.Size(950, 150)
+    $stepList.Size = New-Object System.Drawing.Size(950, 116)
     $stepList.View = [System.Windows.Forms.View]::Details
     $stepList.FullRowSelect = $true
     $stepList.GridLines = $true
@@ -1363,11 +1363,11 @@ function Show-DeployWindow {
     $stepList.Columns.Add("说明", 630) | Out-Null
     $form.Controls.Add($stepList)
 
-    $panelColumnWidth = 303
-    $panelColumnGap = 20
-    $panelTopY = 270
-    $panelBoxTopY = 296
-    $panelBoxHeight = 180
+    $panelColumnWidth = 227
+    $panelColumnGap = 14
+    $panelTopY = 236
+    $panelBoxTopY = 262
+    $panelBoxHeight = 210
 
     $localLabel = New-Object System.Windows.Forms.Label
     $localLabel.Text = "本地部署状态"
@@ -1424,14 +1424,14 @@ function Show-DeployWindow {
     $form.Controls.Add($accountBox)
 
     $appLabel = New-Object System.Windows.Forms.Label
-    $appLabel.Text = "手机 APP 交互状态（仅内容变化时刷新，后台每 1 秒检查）"
-    $appLabel.Location = New-Object System.Drawing.Point(16, 490)
-    $appLabel.Size = New-Object System.Drawing.Size(420, 22)
+    $appLabel.Text = "手机 APP 交互状态"
+    $appLabel.Location = New-Object System.Drawing.Point((16 + (($panelColumnWidth + $panelColumnGap) * 3)), $panelTopY)
+    $appLabel.Size = New-Object System.Drawing.Size($panelColumnWidth, 22)
     $form.Controls.Add($appLabel)
 
     $appBox = New-Object System.Windows.Forms.RichTextBox
-    $appBox.Location = New-Object System.Drawing.Point(16, 516)
-    $appBox.Size = New-Object System.Drawing.Size(950, 130)
+    $appBox.Location = New-Object System.Drawing.Point((16 + (($panelColumnWidth + $panelColumnGap) * 3)), $panelBoxTopY)
+    $appBox.Size = New-Object System.Drawing.Size($panelColumnWidth, $panelBoxHeight)
     $appBox.ScrollBars = "Vertical"
     $appBox.ReadOnly = $true
     $appBox.HideSelection = $false
@@ -1443,13 +1443,13 @@ function Show-DeployWindow {
 
     $detailLabel = New-Object System.Windows.Forms.Label
     $detailLabel.Text = "执行日志（仅内容变化时刷新）"
-    $detailLabel.Location = New-Object System.Drawing.Point(16, 658)
+    $detailLabel.Location = New-Object System.Drawing.Point(16, 486)
     $detailLabel.Size = New-Object System.Drawing.Size(240, 22)
     $form.Controls.Add($detailLabel)
 
     $logBox = New-Object System.Windows.Forms.RichTextBox
-    $logBox.Location = New-Object System.Drawing.Point(16, 684)
-    $logBox.Size = New-Object System.Drawing.Size(950, 268)
+    $logBox.Location = New-Object System.Drawing.Point(16, 512)
+    $logBox.Size = New-Object System.Drawing.Size(950, 412)
     $logBox.ScrollBars = "Vertical"
     $logBox.ReadOnly = $true
     $logBox.HideSelection = $false
@@ -1460,7 +1460,7 @@ function Show-DeployWindow {
 
     $closeButton = New-Object System.Windows.Forms.Button
     $closeButton.Text = "关闭窗口"
-    $closeButton.Location = New-Object System.Drawing.Point(836, 964)
+    $closeButton.Location = New-Object System.Drawing.Point(836, 936)
     $closeButton.Size = New-Object System.Drawing.Size(130, 30)
     $closeButton.Add_Click({ $form.Close() })
     $form.Controls.Add($closeButton)
