@@ -1264,6 +1264,19 @@ function Show-DeployWindow {
         return ($lines -join "`r`n")
     }
 
+    function Build-StepListSignature {
+        param([object[]]$Steps)
+
+        $parts = @()
+        foreach ($step in @($Steps)) {
+            if ($null -eq $step) {
+                continue
+            }
+            $parts += ([string]$step.name + "|" + [string]$step.status + "|" + [string]$step.message)
+        }
+        return ($parts -join "`n")
+    }
+
     $form = New-Object System.Windows.Forms.Form
     $form.Text = "MT5 部署与连接状态"
     $form.StartPosition = "CenterScreen"
@@ -1302,33 +1315,35 @@ function Show-DeployWindow {
     $form.Controls.Add($stepList)
 
     $runtimeLabel = New-Object System.Windows.Forms.Label
-    $runtimeLabel.Text = "运行中（状态每 1 秒刷新）"
+    $runtimeLabel.Text = "运行状态（仅内容变化时刷新，后台每 1 秒检查）"
     $runtimeLabel.Location = New-Object System.Drawing.Point(16, 338)
-    $runtimeLabel.Size = New-Object System.Drawing.Size(240, 22)
+    $runtimeLabel.Size = New-Object System.Drawing.Size(360, 22)
     $form.Controls.Add($runtimeLabel)
 
     $runtimeBox = New-Object System.Windows.Forms.TextBox
     $runtimeBox.Location = New-Object System.Drawing.Point(16, 364)
-    $runtimeBox.Size = New-Object System.Drawing.Size(950, 300)
+    $runtimeBox.Size = New-Object System.Drawing.Size(950, 250)
     $runtimeBox.Multiline = $true
     $runtimeBox.ScrollBars = "Vertical"
     $runtimeBox.ReadOnly = $true
+    $runtimeBox.HideSelection = $false
     $runtimeBox.Font = New-Object System.Drawing.Font("Consolas", 10)
     $runtimeBox.Text = "等待部署完成"
     $form.Controls.Add($runtimeBox)
 
     $detailLabel = New-Object System.Windows.Forms.Label
-    $detailLabel.Text = "执行日志"
-    $detailLabel.Location = New-Object System.Drawing.Point(16, 676)
-    $detailLabel.Size = New-Object System.Drawing.Size(120, 22)
+    $detailLabel.Text = "执行日志（仅内容变化时刷新）"
+    $detailLabel.Location = New-Object System.Drawing.Point(16, 626)
+    $detailLabel.Size = New-Object System.Drawing.Size(240, 22)
     $form.Controls.Add($detailLabel)
 
     $logBox = New-Object System.Windows.Forms.TextBox
-    $logBox.Location = New-Object System.Drawing.Point(16, 702)
-    $logBox.Size = New-Object System.Drawing.Size(950, 250)
+    $logBox.Location = New-Object System.Drawing.Point(16, 652)
+    $logBox.Size = New-Object System.Drawing.Size(950, 300)
     $logBox.Multiline = $true
     $logBox.ScrollBars = "Vertical"
     $logBox.ReadOnly = $true
+    $logBox.HideSelection = $false
     $logBox.Font = New-Object System.Drawing.Font("Consolas", 10)
     $form.Controls.Add($logBox)
 
@@ -1339,6 +1354,56 @@ function Show-DeployWindow {
     $closeButton.Add_Click({ $form.Close() })
     $form.Controls.Add($closeButton)
 
+    $lastStateText = ""
+    $lastStepSignature = ""
+    $lastAppliedRuntimeText = [string]$runtimeBox.Text
+    $lastAppliedLogText = ""
+    $pendingRuntimeText = $null
+    $pendingLogText = $null
+    $lastState = $null
+
+    function Update-TextBoxIfChanged {
+        param(
+            [System.Windows.Forms.TextBox]$TextBox,
+            [string]$NewText,
+            [switch]$AutoScrollToEnd,
+            [ref]$LastAppliedText,
+            [ref]$PendingText
+        )
+
+        $safeText = if ($null -eq $NewText) { "" } else { [string]$NewText }
+        if (($LastAppliedText.Value -eq $safeText) -or ($PendingText.Value -eq $safeText)) {
+            return
+        }
+
+        $PendingText.Value = $safeText
+        if ($TextBox.Focused) {
+            return
+        }
+
+        $shouldScrollToEnd = $false
+        if ($AutoScrollToEnd) {
+            $caretEnd = $TextBox.SelectionStart + $TextBox.SelectionLength
+            $shouldScrollToEnd = ($TextBox.TextLength -eq 0) -or ($caretEnd -ge [Math]::Max(0, $TextBox.TextLength - 4))
+        }
+
+        $TextBox.Text = $PendingText.Value
+        if ($AutoScrollToEnd -and $shouldScrollToEnd) {
+            $TextBox.SelectionStart = $TextBox.TextLength
+            $TextBox.ScrollToCaret()
+        }
+
+        $LastAppliedText.Value = $PendingText.Value
+        $PendingText.Value = $null
+    }
+
+    $runtimeBox.Add_Leave({
+        Update-TextBoxIfChanged -TextBox $runtimeBox -NewText $pendingRuntimeText -LastAppliedText ([ref]$lastAppliedRuntimeText) -PendingText ([ref]$pendingRuntimeText)
+    })
+    $logBox.Add_Leave({
+        Update-TextBoxIfChanged -TextBox $logBox -NewText $pendingLogText -AutoScrollToEnd -LastAppliedText ([ref]$lastAppliedLogText) -PendingText ([ref]$pendingLogText)
+    })
+
     $timer = New-Object System.Windows.Forms.Timer
     $timer.Interval = 1000
     $timer.Add_Tick({
@@ -1346,37 +1411,47 @@ function Show-DeployWindow {
             try {
                 $stateText = Read-TextFileShared -Path $ResolvedStatusFile
                 if (-not [string]::IsNullOrWhiteSpace($stateText)) {
-                    $state = $stateText | ConvertFrom-Json
+                    if ($stateText -ne $lastStateText) {
+                        $lastState = $stateText | ConvertFrom-Json
+                        $lastStateText = $stateText
+                    }
+                    $state = $lastState
                 }
                 else {
                     $state = $null
+                    $lastState = $null
+                    $lastStateText = ""
                 }
                 if ($state) {
                     if ([string]$state.overallStatus -eq "success") {
-                        $statusLabel.Text = "状态：运行中 | 运行中（状态每 1 秒刷新）"
+                        $statusLabel.Text = "状态：运行中 | 仅内容变化时刷新（后台每 1 秒检查）"
                     }
                     else {
                         $statusLabel.Text = "状态：" + $state.overallStatus + " | " + $state.message
                     }
-                    $stepList.BeginUpdate()
-                    $stepList.Items.Clear()
-                    foreach ($step in @($state.steps)) {
-                        $item = New-Object System.Windows.Forms.ListViewItem($step.name)
-                        $null = $item.SubItems.Add([string]$step.status)
-                        $null = $item.SubItems.Add([string]$step.message)
-                        $stepList.Items.Add($item) | Out-Null
+                    $stepSignature = Build-StepListSignature -Steps @($state.steps)
+                    if ($stepSignature -ne $lastStepSignature) {
+                        $stepList.BeginUpdate()
+                        $stepList.Items.Clear()
+                        foreach ($step in @($state.steps)) {
+                            $item = New-Object System.Windows.Forms.ListViewItem($step.name)
+                            $null = $item.SubItems.Add([string]$step.status)
+                            $null = $item.SubItems.Add([string]$step.message)
+                            $stepList.Items.Add($item) | Out-Null
+                        }
+                        $stepList.EndUpdate()
+                        $lastStepSignature = $stepSignature
                     }
-                    $stepList.EndUpdate()
 
                     if ($state.overallStatus -eq "success") {
-                        $runtimeBox.Text = Build-RuntimeStatusText
+                        Update-TextBoxIfChanged -TextBox $runtimeBox -NewText (Build-RuntimeStatusText) -LastAppliedText ([ref]$lastAppliedRuntimeText) -PendingText ([ref]$pendingRuntimeText)
                     }
                     elseif ($state.overallStatus -ne "running") {
                         $statusLabel.Text = "状态：" + $state.overallStatus + " | " + $state.message
-                        $runtimeBox.Text = "等待部署完成"
+                        Update-TextBoxIfChanged -TextBox $runtimeBox -NewText "等待部署完成" -LastAppliedText ([ref]$lastAppliedRuntimeText) -PendingText ([ref]$pendingRuntimeText)
                     }
                     else {
-                        $runtimeBox.Text = "等待部署完成"
+                        Update-TextBoxIfChanged -TextBox $runtimeBox -NewText "等待部署完成" -LastAppliedText ([ref]$lastAppliedRuntimeText) -PendingText ([ref]$pendingRuntimeText)
                     }
                 }
             }
@@ -1386,9 +1461,7 @@ function Show-DeployWindow {
 
         if (Test-Path $ResolvedLogFile) {
             try {
-                $logBox.Text = Read-TextFileShared -Path $ResolvedLogFile
-                $logBox.SelectionStart = $logBox.TextLength
-                $logBox.ScrollToCaret()
+                Update-TextBoxIfChanged -TextBox $logBox -NewText (Read-TextFileShared -Path $ResolvedLogFile) -AutoScrollToEnd -LastAppliedText ([ref]$lastAppliedLogText) -PendingText ([ref]$pendingLogText)
             }
             catch {
             }
