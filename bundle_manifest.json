@@ -1,7 +1,7 @@
 {
   "bundleName": "windows_server_bundle",
-  "generatedAt": "2026-04-22T02:23:51.527253+00:00",
-  "bundleFingerprint": "d344b732ba0a7c11699509e7f52ebf5402ecbaff0ffa0c6fede38ea3c57cd6ae",
+  "generatedAt": "2026-04-22T03:16:48.344029+00:00",
+  "bundleFingerprint": "297dad2c2748165ece4e0dda597ec221d01e8b9b81a86a207025257b7c30b555",
   "fileHashes": {
     "deploy_bundle.cmd": "17de6b05ad6ec6b0adc0614c1e6240c8e55b8d6efe88f2ef65e808aa79e401bd",
     "deploy_bundle.ps1": "9ff04e9ad45ec2e02fd2c363556a4211ac45a8cef1f6a6d72673b1b139c198f7",
@@ -13,7 +13,7 @@
     "mt5_gateway/mt5_login_probe.py": "09c4ab4efcdb8956c42e9413df625d4cbeebfe3963ff823814a09a831b22c139",
     "mt5_gateway/README.md": "e4926129cd3f0a5a379eaecd3b3541cc9db05cf5b0dd81a78bb7139e1f77cb08",
     "mt5_gateway/requirements.txt": "2c80c847d0c3bdeb44b680900384b5a44e42eddc4470bbb912a66aa5ca4cde56",
-    "mt5_gateway/server_v2.py": "bf7966c1a0463ff2a04d3a67c5775cfbb02f6f910f27dd38f79708974f408111",
+    "mt5_gateway/server_v2.py": "80a89cfad8154f2def0583a781fe1c317892f8af56e1d506dfdc84f682e165d6",
     "mt5_gateway/start_admin_panel.ps1": "2111865732449b10969b8615e74911e182510684273bd99c1c2d66834055dfa8",
     "mt5_gateway/start_gateway.ps1": "240aa7a4e49068a1bfbd5443f9696f009abaeb05c27086e538f153b0750eb9db",
     "mt5_gateway/static/admin/app.js": "8c6354744ebf630232427a60e8244713b48fc894abaa1a743247b90b7af7a985",

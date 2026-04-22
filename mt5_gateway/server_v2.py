@@ -7377,14 +7377,14 @@ def source_status():
 
 
 @app.get("/v2/session/status")
-def v2_session_status(request: Optional[Request] = None):
+def v2_session_status(request: Request = None):
     """返回当前会话状态。"""
     _record_runtime_http_request("/v2/session/status", getattr(request, "client", None))
     return _build_verified_session_status_payload()
 
 
 @app.get("/v2/session/public-key")
-def v2_session_public_key(request: Optional[Request] = None):
+def v2_session_public_key(request: Request = None):
     """返回登录信封公钥和当前会话摘要。"""
     _record_runtime_http_request("/v2/session/public-key", getattr(request, "client", None))
     status = session_manager.build_status_payload()
@@ -7420,7 +7420,7 @@ def _build_session_error_detail(
 
 
 @app.post("/v2/session/login")
-def v2_session_login(payload: Dict[str, Any], request: Optional[Request] = None):
+def v2_session_login(payload: Dict[str, Any], request: Request = None):
     """接收加密登录信封并登录新账号。"""
     safe_payload = dict(payload or {})
     request_id = str(safe_payload.get("requestId") or "")
@@ -7508,7 +7508,7 @@ def v2_session_login(payload: Dict[str, Any], request: Optional[Request] = None)
 
 
 @app.post("/v2/session/switch")
-def v2_session_switch(payload: Dict[str, Any], request: Optional[Request] = None):
+def v2_session_switch(payload: Dict[str, Any], request: Request = None):
     """切换到已保存账号。"""
     safe_payload = dict(payload or {})
     request_id = str(safe_payload.get("requestId") or "")
@@ -7576,7 +7576,7 @@ def v2_session_switch(payload: Dict[str, Any], request: Optional[Request] = None
 
 
 @app.post("/v2/session/logout")
-def v2_session_logout(payload: Dict[str, Any], request: Optional[Request] = None):
+def v2_session_logout(payload: Dict[str, Any], request: Request = None):
     """退出当前激活账号。"""
     request_id = str((payload or {}).get("requestId") or "")
     _record_runtime_http_request("/v2/session/logout", getattr(request, "client", None))
@@ -7590,7 +7590,7 @@ def v2_session_logout(payload: Dict[str, Any], request: Optional[Request] = None
 
 
 @app.get("/v2/session/diagnostic/latest")
-def v2_session_diagnostic_latest(requestId: str = Query(default=""), request: Optional[Request] = None):
+def v2_session_diagnostic_latest(requestId: str = Query(default=""), request: Request = None):
     """返回最近一次或指定 requestId 的会话诊断时间线。"""
     _record_runtime_http_request("/v2/session/diagnostic/latest", getattr(request, "client", None))
     items = session_diagnostic_store.latest_timeline(requestId)
@@ -7598,7 +7598,7 @@ def v2_session_diagnostic_latest(requestId: str = Query(default=""), request: Op
 
 
 @app.get("/v2/session/diagnostic/lookup")
-def v2_session_diagnostic_lookup(requestId: str = Query(default=""), request: Optional[Request] = None):
+def v2_session_diagnostic_lookup(requestId: str = Query(default=""), request: Request = None):
     """按 requestId 返回完整会话诊断时间线。"""
     _record_runtime_http_request("/v2/session/diagnostic/lookup", getattr(request, "client", None))
     items = session_diagnostic_store.lookup(requestId)
@@ -7606,7 +7606,7 @@ def v2_session_diagnostic_lookup(requestId: str = Query(default=""), request: Op
 
 
 @app.get("/v2/market/snapshot")
-def v2_market_snapshot(request: Optional[Request] = None):
+def v2_market_snapshot(request: Request = None):
     try:
         _record_runtime_http_request("/v2/market/snapshot", getattr(request, "client", None))
         now_ms = _now_ms()
@@ -7631,7 +7631,7 @@ def v2_market_candles(symbol: str,
                       limit: int = Query(default=300, ge=1, le=1500),
                       startTime: int = Query(default=0, ge=0),
                       endTime: int = Query(default=0, ge=0),
-                      request: Optional[Request] = None):
+                      request: Request = None):
     try:
         _record_runtime_http_request("/v2/market/candles", getattr(request, "client", None))
         now_ms = _now_ms()
@@ -7666,7 +7666,7 @@ def v2_market_candles(symbol: str,
 
 
 @app.get("/v2/account/snapshot")
-def v2_account_snapshot(request: Optional[Request] = None):
+def v2_account_snapshot(request: Request = None):
     try:
         _record_runtime_http_request("/v2/account/snapshot", getattr(request, "client", None))
         now_ms = _now_ms()
@@ -7720,7 +7720,7 @@ def v2_account_snapshot(request: Optional[Request] = None):
 def v2_account_history(
     range: str = Query(default="all", pattern="^(1d|7d|1m|3m|1y|all)$"),
     cursor: str = Query(default=""),
-    request: Optional[Request] = None,
+    request: Request = None,
 ):
     try:
         _record_runtime_http_request("/v2/account/history", getattr(request, "client", None))
@@ -7759,7 +7759,7 @@ def v2_account_history(
 
 
 @app.get("/v2/account/full")
-def v2_account_full(request: Optional[Request] = None):
+def v2_account_full(request: Request = None):
     try:
         _record_runtime_http_request("/v2/account/full", getattr(request, "client", None))
         now_ms = _now_ms()
@@ -7798,7 +7798,7 @@ def v2_account_full(request: Optional[Request] = None):
 
 
 @app.post("/v2/trade/check")
-def v2_trade_check(payload: Dict[str, Any], request: Optional[Request] = None):
+def v2_trade_check(payload: Dict[str, Any], request: Request = None):
     _record_runtime_http_request("/v2/trade/check", getattr(request, "client", None))
     try:
         now_ms = _now_ms()
@@ -7880,7 +7880,7 @@ def v2_trade_check(payload: Dict[str, Any], request: Optional[Request] = None):
 
 
 @app.post("/v2/trade/submit")
-def v2_trade_submit(payload: Dict[str, Any], request: Optional[Request] = None):
+def v2_trade_submit(payload: Dict[str, Any], request: Request = None):
     _record_runtime_http_request("/v2/trade/submit", getattr(request, "client", None))
     now_ms = _now_ms()
     account_mode = _detect_account_mode()
@@ -8088,7 +8088,7 @@ def v2_trade_submit(payload: Dict[str, Any], request: Optional[Request] = None):
 
 
 @app.get("/v2/trade/result")
-def v2_trade_result(requestId: str = Query(default=""), request: Optional[Request] = None):
+def v2_trade_result(requestId: str = Query(default=""), request: Request = None):
     _record_runtime_http_request("/v2/trade/result", getattr(request, "client", None))
     request_id = str(requestId or "").strip()
     if not request_id:
@@ -8133,7 +8133,7 @@ def v2_trade_result(requestId: str = Query(default=""), request: Optional[Reques
 
 
 @app.post("/v2/trade/batch/submit")
-def v2_trade_batch_submit(payload: Dict[str, Any], request: Optional[Request] = None):
+def v2_trade_batch_submit(payload: Dict[str, Any], request: Request = None):
     _record_runtime_http_request("/v2/trade/batch/submit", getattr(request, "client", None))
     now_ms = _now_ms()
     account_mode = _detect_account_mode()
@@ -8165,7 +8165,7 @@ def v2_trade_batch_submit(payload: Dict[str, Any], request: Optional[Request] = 
 
 
 @app.get("/v2/trade/batch/result")
-def v2_trade_batch_result(batchId: str = Query(default=""), request: Optional[Request] = None):
+def v2_trade_batch_result(batchId: str = Query(default=""), request: Request = None):
     _record_runtime_http_request("/v2/trade/batch/result", getattr(request, "client", None))
     batch_id = str(batchId or "").strip()
     if not batch_id:
